@@ -1,0 +1,39 @@
+# pixterm's personal harness wiring — injected by /omakase-init, gitignored via
+# .git/info/exclude (never committed). Merges OVER pixterm's committed lefthook.yml:
+# pixterm's own stack tooling (prettier/stylelint pre-commit, the turbo pre-push
+# wall) stays committed; these guards ride on top, personally.
+#
+# Each `run` resolves from the repo root. Per-job `env` parameterizes the generic
+# guards. Escape hatches: SKIP_WORKTREE_CHECK=1, SKIP_ADR_CHECK=1, OMAKASE_SKIP_VISUAL_VERIFY=1.
+
+pre-commit:
+  jobs:
+    # Refuse a main-checkout commit that would inherit a concurrent worktree's WIP.
+    # Pure git; dormant unless more than one worktree is active.
+    - name: worktree-discipline
+      run: bash .omakase/gates/worktree-discipline.sh
+
+    # Require a paired ADR when a declared architectural file changes. Activated by
+    # naming pixterm's architectural files; dormant for anyone who clears the list.
+    - name: adr-required
+      run: bash .omakase/gates/adr-required.sh
+      env:
+        HARNESS_ARCH_FILES: 'ARCHITECTURE.md AGENTS.md'
+
+pre-push:
+  jobs:
+    # Deferred gate: confirm /visual-verify recorded a fresh PASS for the UI being
+    # pushed; block otherwise. Dormant unless the pushed range touches OMAKASE_GLOB.
+    - name: deferred-check-visual-verify
+      run: bash .omakase/gates/deferred-check.sh
+      env:
+        OMAKASE_CHECK: visual-verify
+        OMAKASE_GLOB: 'apps/web/* packages/*-control/*'
+
+# Worktree self-arm: copy any MISSING injected file into this worktree from the
+# shared snapshot on every checkout. Never overwrites a local edit, never touches a
+# tracked path. Script lives in the shared git dir; written by init.sh.
+post-checkout:
+  jobs:
+    - name: omakase-self-arm
+      run: bash "$(git rev-parse --git-common-dir)/omakase/ensure-present.sh"
