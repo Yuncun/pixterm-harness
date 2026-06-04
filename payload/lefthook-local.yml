@@ -65,9 +65,9 @@ pre-push:
         OMAKASE_CHECK: visual-verify
         OMAKASE_GLOB: 'apps/web/* packages/*-control/*'
 
-# Worktree self-arm: copy any MISSING injected file into this worktree from the
+# Worktree auto-install: copy any MISSING injected file into this worktree from the
 # shared snapshot on every checkout. Never overwrites a local edit. Written by init.sh.
 post-checkout:
   jobs:
-    - name: omakase-self-arm
+    - name: omakase-ensure-present
       run: bash "$(git rev-parse --git-common-dir)/omakase/ensure-present.sh"
