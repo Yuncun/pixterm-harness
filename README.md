@@ -6,11 +6,13 @@ pixterm's personal harness, packaged as a Claude Code plugin. It is built on the
 
 `/omakase-init` overlays the payload into the repo at real paths, records every placed path
 in `.git/info/exclude` (so nothing is committed and `.gitignore` is untouched), installs
-lefthook, and wires worktree self-arm. `/omakase-remove` reverses it. The injected wiring
-(`lefthook-local.yml`) merges *over* a committed `lefthook.yml`, so a repo's own stack gates
-stay committed while these guards ride on top, personally.
+lefthook, and wires worktree self-arm. `/omakase-remove` reverses it. The injected
+`lefthook-local.yml` is the sole local hook config — pixterm commits no `lefthook.yml` — and
+carries pixterm's whole local gate suite: the scoped checkers (prettier, stylelint;
+staged-file-scoped, per-commit), the complete checkers (typecheck, lint, test, the
+validators; whole-project, per-push), and the guards below.
 
-## What it injects
+## Guards
 
 | Guard | Hook | What it does |
 | ----- | ---- | ------------ |
