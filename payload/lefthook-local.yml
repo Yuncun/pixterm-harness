@@ -29,6 +29,7 @@ pre-commit:
 
     - name: adr-required
       run: bash .omakase/gates/adr-required.sh
+      tags: [adr]
       env:
         HARNESS_ARCH_FILES: 'ARCHITECTURE.md AGENTS.md'
 
