@@ -92,6 +92,19 @@ git checkout -q -b feat; echo '<template/>' > app.vue; git add -A; git commit -q
 ( OMAKASE_CHECK=vv OMAKASE_GLOB='*.vue' OMAKASE_BASE=master OMAKASE_SKIP_VV=1 bash "$CHECKER" ) >/dev/null 2>&1
 check "escape hatch OMAKASE_SKIP_VV=1 passes (exit 0)" 0 $?
 
+# 15. Nested-path glob (regression for the pathname-expansion bug). A multi-segment
+#     glob (apps/web/*) against a NESTED changed file must match. Without `set -f`,
+#     `for g in $OMAKASE_GLOB` expands apps/web/* to real entries (apps/web/src) and
+#     the literal pattern is lost, so the nested change silently fails to match. The
+#     fixture MUST contain a real apps/web/ dir for the expansion to bite (the reason
+#     test 4's flat *.vue fixture never caught this).
+d=$(newrepo); cd "$d"
+git checkout -q -b feat
+mkdir -p apps/web/src; echo '<template/>' > apps/web/src/App.vue
+git add -A; git commit -q --no-verify -m nestedvue
+( OMAKASE_CHECK=vv OMAKASE_GLOB='apps/web/*' OMAKASE_BASE=master bash "$CHECKER" ) >/dev/null 2>&1
+check "nested-path glob matches (in-scope, no record -> exit 1)" 1 $?
+
 echo ""
 echo "omakase-record.sh"
 

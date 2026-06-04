@@ -13,14 +13,17 @@
 pre-commit:
   jobs:
     # --- scoped checkers ---
+    # pnpm exec resolves the tool from the project's node_modules — lefthook does
+    # not add node_modules/.bin to PATH, and bare `prettier`/`stylelint` are not
+    # globally installed, so a bare name fails with exit 127 on every staged match.
     - name: prettier
       glob: '*.{ts,tsx,vue,js,css,scss,json,md,yml,yaml}'
-      run: prettier --write --no-error-on-unmatched-pattern {staged_files}
+      run: pnpm exec prettier --write --no-error-on-unmatched-pattern {staged_files}
       stage_fixed: true
 
     - name: stylelint
       glob: '*.{css,scss,vue}'
-      run: stylelint --fix --allow-empty-input {staged_files}
+      run: pnpm exec stylelint --fix --allow-empty-input {staged_files}
       stage_fixed: true
 
     # --- discipline guards ---

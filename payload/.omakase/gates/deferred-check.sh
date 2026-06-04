@@ -69,6 +69,11 @@ CHANGED="$(git diff --name-only "${BASE}...HEAD" 2>/dev/null || true)"
 
 matched=0
 if [[ -n "$CHANGED" && -n "${OMAKASE_GLOB:-}" ]]; then
+  # noglob: $OMAKASE_GLOB must word-split into literal case patterns (apps/web/*),
+  # NOT pathname-expand against the working tree. Without this, a pattern that
+  # matches real files (the common case) expands to those filenames and the
+  # literal pattern is lost, so nested paths silently fail to match.
+  set -f
   while IFS= read -r file; do
     [[ -z "$file" ]] && continue
     for g in $OMAKASE_GLOB; do
@@ -79,6 +84,7 @@ if [[ -n "$CHANGED" && -n "${OMAKASE_GLOB:-}" ]]; then
     done
     [[ $matched -eq 1 ]] && break
   done <<< "$CHANGED"
+  set +f
 fi
 
 if [[ $matched -eq 0 ]]; then
