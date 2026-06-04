@@ -1,29 +1,63 @@
 # pixterm's personal harness wiring — injected by /omakase-init, gitignored via
-# .git/info/exclude (never committed). Merges OVER pixterm's committed lefthook.yml:
-# pixterm's own stack tooling (prettier/stylelint pre-commit, the turbo pre-push
-# wall) stays committed; these guards ride on top, personally.
+# .git/info/exclude (never committed). pixterm commits NO lefthook.yml, so this is
+# the SOLE local hook config — nothing to merge over; every local git-hook gate
+# lives here.
 #
-# Each `run` resolves from the repo root. Per-job `env` parameterizes the generic
-# guards. Escape hatches: SKIP_WORKTREE_CHECK=1, SKIP_ADR_CHECK=1, OMAKASE_SKIP_VISUAL_VERIFY=1.
+# Gates are grouped by TYPE, built to extend (add more of a type, don't special-case):
+#   scoped checkers   — fast, staged-file-scoped, auto-fix; run per-commit.
+#   complete checkers — whole-project; run per-push (turbo cache keeps repeats cheap).
+#   discipline guards — workflow enforcement (worktree, ADR, visual-verify).
+#
+# Escape hatches: SKIP_WORKTREE_CHECK=1, SKIP_ADR_CHECK=1, OMAKASE_SKIP_VISUAL_VERIFY=1.
 
 pre-commit:
   jobs:
-    # Refuse a main-checkout commit that would inherit a concurrent worktree's WIP.
-    # Pure git; dormant unless more than one worktree is active.
+    # --- scoped checkers ---
+    - name: prettier
+      glob: '*.{ts,tsx,vue,js,css,scss,json,md,yml,yaml}'
+      run: prettier --write --no-error-on-unmatched-pattern {staged_files}
+      stage_fixed: true
+
+    - name: stylelint
+      glob: '*.{css,scss,vue}'
+      run: stylelint --fix --allow-empty-input {staged_files}
+      stage_fixed: true
+
+    # --- discipline guards ---
     - name: worktree-discipline
       run: bash .omakase/gates/worktree-discipline.sh
 
-    # Require a paired ADR when a declared architectural file changes. Activated by
-    # naming pixterm's architectural files; dormant for anyone who clears the list.
     - name: adr-required
       run: bash .omakase/gates/adr-required.sh
       env:
         HARNESS_ARCH_FILES: 'ARCHITECTURE.md AGENTS.md'
 
 pre-push:
+  parallel: true
   jobs:
-    # Deferred gate: confirm /visual-verify recorded a fresh PASS for the UI being
-    # pushed; block otherwise. Dormant unless the pushed range touches OMAKASE_GLOB.
+    # --- complete checkers ---
+    - name: typecheck
+      run: pnpm exec turbo run typecheck
+
+    - name: lint
+      run: pnpm exec turbo run lint
+
+    - name: test
+      run: pnpm exec turbo run test
+
+    - name: validate-packages
+      run: pnpm run validate:packages
+
+    - name: validate-exports
+      run: pnpm run validate:exports
+
+    - name: validate-markdown-links
+      run: pnpm run validate:markdown-links
+
+    - name: audit-ui-regression-tests
+      run: pnpm run validate:audit-ui-regression-tests
+
+    # --- discipline guards ---
     - name: deferred-check-visual-verify
       run: bash .omakase/gates/deferred-check.sh
       env:
@@ -31,8 +65,7 @@ pre-push:
         OMAKASE_GLOB: 'apps/web/* packages/*-control/*'
 
 # Worktree self-arm: copy any MISSING injected file into this worktree from the
-# shared snapshot on every checkout. Never overwrites a local edit, never touches a
-# tracked path. Script lives in the shared git dir; written by init.sh.
+# shared snapshot on every checkout. Never overwrites a local edit. Written by init.sh.
 post-checkout:
   jobs:
     - name: omakase-self-arm
