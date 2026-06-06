@@ -6,7 +6,7 @@
 # from $HARNESS_ARCH_FILES (space-separated). UNSET OR EMPTY = DORMANT (exit 0
 # immediately), so a project that keeps no ADRs is opted out by doing nothing.
 # A project opts in by declaring the files via a per-script env override in its
-# lefthook.yml — see AGENTS.md and .claude/rules/harness-gates.md. Create ADRs
+# lefthook.yml — see AGENTS.md and HARNESS.md. Create ADRs
 # with /adr-new.
 set -euo pipefail
 

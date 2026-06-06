@@ -1,6 +1,6 @@
 {
   "name": "pixterm-harness",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "pixterm's personal harness, built on the omakase-harness injector: overlay pixterm's guards (worktree-discipline, adr-required, the visual-verify deferred gate) into the repo, keep them out of git, and run them on your git hooks. Zero committed footprint.",
   "commands": "./commands"
 }
