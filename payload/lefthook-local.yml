@@ -1,4 +1,10 @@
-# pixterm's personal harness wiring — injected by /omakase-init, gitignored via
+# NOT A STANDALONE EXAMPLE. This is pixterm-engine's OWN harness. The pre-push jobs
+# below call `pnpm exec turbo ...` and `pnpm run validate:*` — scripts and a turbo
+# pipeline that exist only in pixterm-engine's committed package.json/turbo.json.
+# Inject this payload into any other repo and those pre-push jobs fail (command not
+# found). For a generic, runs-anywhere example, see the omakase-harness base plugin.
+#
+# pixterm's personal harness wiring — injected by `/omakase init`, gitignored via
 # .git/info/exclude (never committed). pixterm commits NO lefthook.yml, so this is
 # the SOLE local hook config — nothing to merge over; every local git-hook gate
 # lives here.
