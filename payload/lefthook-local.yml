@@ -40,7 +40,9 @@ pre-commit:
       run: bash .omakase/gates/adr-required.sh
       tags: [adr]
       env:
-        HARNESS_ARCH_FILES: 'ARCHITECTURE.md AGENTS.md'
+        # AGENTS.md is now injected (gitignored) and can never stage, so listing it
+        # here is dead — adr-required only fires on ARCHITECTURE.md (still committed).
+        HARNESS_ARCH_FILES: 'ARCHITECTURE.md'
 
 pre-push:
   parallel: true
