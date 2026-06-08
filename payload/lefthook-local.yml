@@ -14,11 +14,28 @@
 #   complete checkers — whole-project; run per-push (turbo cache keeps repeats cheap).
 #   discipline guards — workflow enforcement (worktree, ADR, visual-verify).
 #
+# 🍣 SCORECARD: verifying gates are wrapped in `omakase-ledger.sh <name> -- <cmd>`, which
+# runs the gate, passes its exit code straight through, and appends a pass/fail row to
+# the shared ledger that `/omakase show` (RECENT RUNS) and the status-line segment read.
+# Auto-fixers (prettier, stylelint) are deliberately NOT ledgered — they fix-and-pass, so
+# a verdict for them is low signal. OMAKASE_HOOK is the trigger label shown in the scorecard.
+#
+# BANNER: `output` drops only lefthook's `meta` header box (the omakase-banner job prints
+# the branded box in its place) and keeps the summary — so a multi-job pre-push still lists
+# every gate's verdict + timing under the box. On pre-push the banner runs sequentially
+# first, then the checks run in a parallel `group`.
+#
 # Escape hatches: SKIP_WORKTREE_CHECK=1, SKIP_ADR_CHECK=1, OMAKASE_SKIP_VISUAL_VERIFY=1.
+
+output: [summary, success, failure, execution_out]
 
 pre-commit:
   jobs:
-    # --- scoped checkers ---
+    # Branded header box (replaces lefthook's). Runs first; its only output is the box.
+    - name: omakase-banner
+      run: bash .omakase/bin/omakase-banner.sh pre-commit
+
+    # --- scoped checkers (auto-fixers; not ledgered — they fix-and-pass) ---
     # pnpm exec resolves the tool from the project's node_modules — lefthook does
     # not add node_modules/.bin to PATH, and bare `prettier`/`stylelint` are not
     # globally installed, so a bare name fails with exit 127 on every staged match.
@@ -32,49 +49,74 @@ pre-commit:
       run: pnpm exec stylelint --fix --allow-empty-input {staged_files}
       stage_fixed: true
 
-    # --- discipline guards ---
+    # --- discipline guards (ledgered → 🍣 scorecard) ---
     - name: worktree-discipline
-      run: bash .omakase/gates/worktree-discipline.sh
+      run: bash .omakase/bin/omakase-ledger.sh worktree-discipline -- bash .omakase/gates/worktree-discipline.sh
+      env:
+        OMAKASE_HOOK: pre-commit
 
     - name: adr-required
-      run: bash .omakase/gates/adr-required.sh
+      run: bash .omakase/bin/omakase-ledger.sh adr-required -- bash .omakase/gates/adr-required.sh
       tags: [adr]
       env:
         # AGENTS.md is now injected (gitignored) and can never stage, so listing it
         # here is dead — adr-required only fires on ARCHITECTURE.md (still committed).
         HARNESS_ARCH_FILES: 'ARCHITECTURE.md'
+        OMAKASE_HOOK: pre-commit
 
 pre-push:
-  parallel: true
   jobs:
-    # --- complete checkers ---
-    - name: typecheck
-      run: pnpm exec turbo run typecheck
+    # Branded header box first (sequential), then the checks run in parallel below.
+    - name: omakase-banner
+      run: bash .omakase/bin/omakase-banner.sh pre-push
 
-    - name: lint
-      run: pnpm exec turbo run lint
+    - name: checks
+      group:
+        parallel: true
+        jobs:
+          # --- complete checkers (ledgered → 🍣 scorecard) ---
+          - name: typecheck
+            run: bash .omakase/bin/omakase-ledger.sh typecheck -- pnpm exec turbo run typecheck
+            env:
+              OMAKASE_HOOK: pre-push
 
-    - name: test
-      run: pnpm exec turbo run test
+          - name: lint
+            run: bash .omakase/bin/omakase-ledger.sh lint -- pnpm exec turbo run lint
+            env:
+              OMAKASE_HOOK: pre-push
 
-    - name: validate-packages
-      run: pnpm run validate:packages
+          - name: test
+            run: bash .omakase/bin/omakase-ledger.sh test -- pnpm exec turbo run test
+            env:
+              OMAKASE_HOOK: pre-push
 
-    - name: validate-exports
-      run: pnpm run validate:exports
+          - name: validate-packages
+            run: bash .omakase/bin/omakase-ledger.sh validate-packages -- pnpm run validate:packages
+            env:
+              OMAKASE_HOOK: pre-push
 
-    - name: validate-markdown-links
-      run: pnpm run validate:markdown-links
+          - name: validate-exports
+            run: bash .omakase/bin/omakase-ledger.sh validate-exports -- pnpm run validate:exports
+            env:
+              OMAKASE_HOOK: pre-push
 
-    - name: audit-ui-regression-tests
-      run: pnpm run validate:audit-ui-regression-tests
+          - name: validate-markdown-links
+            run: bash .omakase/bin/omakase-ledger.sh validate-markdown-links -- pnpm run validate:markdown-links
+            env:
+              OMAKASE_HOOK: pre-push
 
-    # --- discipline guards ---
-    - name: deferred-check-visual-verify
-      run: bash .omakase/gates/deferred-check.sh
-      env:
-        OMAKASE_CHECK: visual-verify
-        OMAKASE_GLOB: 'apps/web/* packages/*-control/*'
+          - name: audit-ui-regression-tests
+            run: bash .omakase/bin/omakase-ledger.sh audit-ui-regression-tests -- pnpm run validate:audit-ui-regression-tests
+            env:
+              OMAKASE_HOOK: pre-push
+
+          # --- discipline guard: visual-verify deferred gate (ledgered → 🍣 scorecard) ---
+          - name: deferred-check-visual-verify
+            run: bash .omakase/bin/omakase-ledger.sh visual-verify -- bash .omakase/gates/deferred-check.sh
+            env:
+              OMAKASE_CHECK: visual-verify
+              OMAKASE_GLOB: 'apps/web/* packages/*-control/*'
+              OMAKASE_HOOK: pre-push
 
 # Worktree auto-install: copy any MISSING injected file into this worktree from the
 # shared snapshot on every checkout. Never overwrites a local edit. Written by init.sh.
