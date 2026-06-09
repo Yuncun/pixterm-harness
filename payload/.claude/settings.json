@@ -13,6 +13,16 @@
           }
         ]
       }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/.omakase/bin/omakase-stop-notice.sh"
+          }
+        ]
+      }
     ]
   }
 }
