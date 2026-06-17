@@ -123,19 +123,21 @@ else
 fi
 [ -d "$PAYLOAD" ] || { echo "omakase: payload dir not found at $PAYLOAD" >&2; exit 1; }
 # Resolve a lefthook invocation WITHOUT mutating the user's global environment.
-# Order: an explicit override; lefthook already on PATH (a global brew/mise install);
-# then the repo's own node_modules/.bin (a JS devDependency — the common case). We do
-# NOT auto-install: a global install is irreversible (/omakase-remove can't undo it)
-# and a hook script has no interactive user to ask. When lefthook is genuinely absent
-# we exit with guidance; the /omakase-init command layer is where an interactive
-# "install it for you?" belongs (that's where a user exists to answer). Sets $LEFTHOOK.
-resolve_lefthook() {
-  if [ -n "${LEFTHOOK_BIN:-}" ];                  then LEFTHOOK="$LEFTHOOK_BIN"; return 0; fi
-  if command -v lefthook >/dev/null 2>&1;          then LEFTHOOK="lefthook"; return 0; fi
-  if [ -x "$ROOT/node_modules/.bin/lefthook" ];    then LEFTHOOK="$ROOT/node_modules/.bin/lefthook"; return 0; fi
-  return 1
-}
-resolve_lefthook || { echo "omakase: lefthook not found. Install it (e.g. 'brew install lefthook', 'mise use lefthook', or add it as a devDependency and run your package manager's install), or set LEFTHOOK_BIN=/path/to/lefthook, then re-run." >&2; exit 1; }
+# Order (shared with remove.sh via lib-lefthook.sh): an explicit override; lefthook
+# already on PATH (a global brew/mise install); then the repo's own node_modules/.bin
+# (a JS devDependency); then a pinned, checksum-verified binary in a per-machine cache,
+# FETCHED here if absent (the 'fetch' argument). We still do NOT touch the user's global
+# environment: the cache is per-machine and disposable, so it is reversible in a way a
+# global brew install is not. On any fetch failure (unknown platform, no curl/wget, no
+# network, checksum mismatch) we fall back to the original guidance + non-zero — never
+# worse than before. Resolution runs BEFORE any placement, so a failure exits clean.
+# Sets $LEFTHOOK.
+. "$SCRIPT_DIR/lib-lefthook.sh"
+resolve_lefthook fetch || { lefthook_install_guidance; exit 1; }
+
+# Shared harness-path table — kind_of() + capture/scan lists, the single source of truth
+# for which paths are agent artifacts (shared with show.sh and import.sh).
+. "$SCRIPT_DIR/lib-harness-paths.sh"
 
 BEGIN="# >>> omakase-harness >>>"
 END="# <<< omakase-harness <<<"
@@ -268,21 +270,8 @@ if [ -n "$prior_paths" ]; then
 fi
 
 # ---- provenance-ledger helpers ----
-# kind: classify a placed path by location (the path IS the classification).
-# DUPLICATED in bin/show.sh kind_of() — keep the two case blocks in sync.
-kind_of() {
-  case "$1" in
-    .claude/rules/*)                                  echo rule;;
-    .claude/skills/*)                                 echo skill;;
-    .claude/commands/*)                               echo command;;
-    lefthook-local.yml|lefthook.yml|.omakase/gates/*) echo gate;;
-    .claude/settings.json|.claude/settings.*.json)    echo config;;
-    AGENTS.md|CLAUDE.md)                              echo doc;;
-    */*)                                              echo other;;  # nested, none of the above
-    *.md)                                             echo doc;;    # remaining root-level *.md
-    *)                                                echo other;;
-  esac
-}
+# kind_of() (classify a placed path by location) is provided by lib-harness-paths.sh,
+# sourced above — the one table shared with show.sh and import.sh.
 # sha256 of placed content (the SHA256 tool was detected once, up top). For a
 # symlink, hash the link TARGET STRING, not the dereferenced content, so a
 # payload symlink (CLAUDE.md -> AGENTS.md) round-trips.
@@ -359,7 +348,15 @@ fi
 # auto-created lefthook.yml if the repo does not track one.
 prefixes=()
 add_prefix(){ case " ${prefixes[*]:-} " in *" $1 "*) ;; *) prefixes+=("$1");; esac; }
-for rel in "${placed[@]:-}"; do [ -n "$rel" ] && add_prefix "${rel%%/*}"; done
+# Exclude granularity: an omakase-OWNED top dir (.omakase, .claude, …) is excluded wholesale
+# (small + stable). A top dir omakase SHARES with the project (.github — see
+# HARNESS_SHARED_TOPDIRS in lib-harness-paths.sh) is excluded file-by-file instead, so we
+# never hide the project's OWN untracked files under it.
+is_shared_topdir(){ local d; for d in "${HARNESS_SHARED_TOPDIRS[@]}"; do [ "$1" = "$d" ] && return 0; done; return 1; }
+for rel in "${placed[@]:-}"; do
+  [ -n "$rel" ] || continue
+  if is_shared_topdir "${rel%%/*}"; then add_prefix "$rel"; else add_prefix "${rel%%/*}"; fi
+done
 git -C "$ROOT" ls-files --error-unmatch lefthook.yml >/dev/null 2>&1 || add_prefix "lefthook.yml"
 
 # Worktree auto-install wiring (.worktreeinclude). Only when the repo does not TRACK
