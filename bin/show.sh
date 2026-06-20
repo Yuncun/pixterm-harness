@@ -28,6 +28,26 @@ END="# <<< omakase-harness <<<"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/lib-harness-paths.sh"   # kind_of() + committed-scan globs (shared with init/import)
 
+# Drift detection (read-only) — does a placed file still match the hash recorded at init?
+# Mirrors init.sh hash_of() + ensure-present.sh EXACTLY (symlink -> readlink target string;
+# file -> bytes verbatim; same digest tool) so the audit view never disagrees with the
+# post-checkout warning. No digest tool -> never reports drift (degrades to silence).
+if command -v shasum >/dev/null 2>&1; then _omk_sha() { shasum -a 256; }
+elif command -v sha256sum >/dev/null 2>&1; then _omk_sha() { sha256sum; }
+else _omk_sha() { return 1; }; fi
+omakase_hash_of() {  # $1 = path; echoes the hex digest, or nothing if no digest tool
+  command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 || return 0
+  if [ -L "$1" ]; then printf '%s' "$(readlink "$1" 2>/dev/null)" | _omk_sha | awk '{print $1}'
+  else [ -r "$1" ] && _omk_sha < "$1" | awk '{print $1}'; fi   # unreadable -> empty -> no drift, no stderr leak
+}
+is_drifted() {  # $1 rel, $2 ledger-hash, $3 enabled -> 0 (true) if present & content-changed
+  [ "$3" = "1" ] || return 1                                            # disabled: not managed, never "drifted"
+  { [ -e "$ROOT/$1" ] || [ -L "$ROOT/$1" ]; } || return 1              # missing is its own state, not drift
+  git -C "$ROOT" ls-files --error-unmatch "$1" >/dev/null 2>&1 && return 1   # tracked: upstream owns it
+  local a; a="$(omakase_hash_of "$ROOT/$1")" || a=""
+  [ -n "$2" ] && [ -n "$a" ] && [ "$a" != "$2" ]
+}
+
 # ============================ Inventory (spec §3) ============================
 # Every harness artifact in this repo, grouped by origin: committed by the
 # project, injected from a source (the provenance ledger), personal (~/.claude + ~/.copilot).
@@ -88,12 +108,13 @@ render_inventory() {
     if [ -f "$PLACED" ] && [ -s "$PLACED" ]; then
       while IFS=$'\t' read -r rel kind src hash enabled; do
         [ -z "$rel" ] && continue
+        dz=""; if is_drifted "$rel" "$hash" "$enabled"; then dz=" — **DRIFTED** (differs from canonical; \`/omakase init\` to re-sync, or it may be an intentional local edit)"; fi
         if [ "$enabled" = "0" ]; then
           echo "- \`$rel\` — $kind, from $src — disabled (not restored, not verified)"
         elif [ -L "$ROOT/$rel" ]; then
-          echo "- \`$rel\` → \`$(readlink "$ROOT/$rel")\` — $kind, from $src"
+          echo "- \`$rel\` → \`$(readlink "$ROOT/$rel")\` — $kind, from $src$dz"
         elif [ -e "$ROOT/$rel" ]; then
-          echo "- \`$rel\` — $kind, from $src"
+          echo "- \`$rel\` — $kind, from $src$dz"
         else
           echo "- \`$rel\` — $kind, from $src — **MISSING** (run \`/omakase init\` to restore)"
         fi
@@ -126,12 +147,13 @@ render_inventory() {
     if [ -f "$PLACED" ] && [ -s "$PLACED" ]; then
       while IFS=$'\t' read -r rel kind src hash enabled; do
         [ -z "$rel" ] && continue
+        dz=""; mk="+"; if is_drifted "$rel" "$hash" "$enabled"; then dz="; DRIFTED — differs from canonical, run /omakase init to re-sync"; mk="~"; fi
         if [ "$enabled" = "0" ]; then
           echo "    - $rel   ($kind, from $src; disabled — not restored, not verified)"
         elif [ -L "$ROOT/$rel" ]; then
-          echo "    + $rel -> $(readlink "$ROOT/$rel")   ($kind, from $src)"
+          echo "    $mk $rel -> $(readlink "$ROOT/$rel")   ($kind, from $src$dz)"
         elif [ -e "$ROOT/$rel" ]; then
-          echo "    + $rel   ($kind, from $src)"
+          echo "    $mk $rel   ($kind, from $src$dz)"
         else
           echo "    ! $rel   ($kind, from $src; MISSING — run /omakase init to restore)"
         fi
@@ -147,6 +169,162 @@ render_inventory() {
       done
     else
       echo "    (none)"
+    fi
+  fi
+}
+
+# ============================ Guards chart (the "run when" table) ============================
+# ONE chart for every wired guard: which git hook fires it (RUN WHEN), the guard's
+# canonical (ledgered) name, what it ENFORCES, and the most-recent verdict from the run
+# ledger. Derived from `lefthook dump` (the normalized wiring) joined to ledger.tsv — this
+# replaces the old raw-YAML "git hooks" dump + the separate "recent runs" table with a
+# single readable chart. The cosmetic banner job is omitted. ENFORCES is a short built-in
+# phrase keyed by the gate script's basename (falls back to the script path for custom/
+# unknown gates, so the base harness and any consumer gate still render). If lefthook can't
+# be resolved, degrades to the raw wiring file + the plain run ledger (render_guards_fallback).
+render_guards() {
+  local LH="" DUMP="" now RUNS_FILE
+  if [ -n "${LEFTHOOK_BIN:-}" ]; then LH="$LEFTHOOK_BIN"
+  elif command -v lefthook >/dev/null 2>&1; then LH="lefthook"
+  elif [ -x "$ROOT/node_modules/.bin/lefthook" ]; then LH="$ROOT/node_modules/.bin/lefthook"; fi
+  [ -n "$LH" ] && DUMP="$( cd "$ROOT" && "$LH" dump 2>/dev/null || true )"
+
+  if [ -z "$DUMP" ]; then render_guards_fallback; return; fi
+
+  now="${OMAKASE_NOW:-$(date +%s)}"
+  RUNS_FILE="$RUNS"; [ -f "$RUNS_FILE" ] || RUNS_FILE=/dev/null
+  # Pass 1 (FILENAME==runsfile): latest verdict+ts per gate. Pass 2 (the dump): walk
+  # hook -> job -> run, emit one buffered row per non-cosmetic job, join the verdict by
+  # the ledgered gate name. Buffer + END so the header prints only when rows exist and
+  # term columns can be width-aligned (only the ASCII columns are padded; the verdict
+  # cell carries the multibyte check/cross and is always last, so alignment stays exact).
+  awk -v runsfile="$RUNS_FILE" -v now="$now" -v fmt="$FORMAT" '
+    BEGIN { FS="\t"; wH=length("RUN WHEN"); wG=length("GUARD"); wE=length("ENFORCES") }
+    FILENAME==runsfile {
+      if (NF>=5 && $1 ~ /^[0-9]+$/) { ts=$1+0; if (ts>=seen[$3]) { seen[$3]=ts; verd[$3]=$4 } }
+      next
+    }
+    /^[A-Za-z0-9_-]+:[[:space:]]*$/ { curhook=$0; sub(/:.*/,"",curhook); next }   # hook header (col 0)
+    /^[[:space:]]*-[[:space:]]+name:[[:space:]]*/ {
+      line=$0; sub(/^[[:space:]]*-[[:space:]]+name:[[:space:]]*/,"",line); jobname=line; haverun=0; next
+    }
+    /^[[:space:]]*run:[[:space:]]*/ {
+      if (jobname=="" || haverun) next                      # only the first run: after a name:
+      haverun=1
+      line=$0; sub(/^[[:space:]]*run:[[:space:]]*/,"",line); runcmd=line
+      if (jobname=="omakase-banner") { jobname=""; next }   # cosmetic header box, not a guard
+      ledgered=0; gate=""
+      if (match(runcmd, /omakase-ledger\.sh [A-Za-z0-9._-]+/)) {   # ledgered gate -> canonical name
+        s=substr(runcmd,RSTART,RLENGTH); sub(/^omakase-ledger\.sh /,"",s); gate=s; ledgered=1
+      }
+      act=runcmd                                            # the action: strip the ledger wrapper
+      p=index(act," -- "); if (p>0) act=substr(act,p+4)
+      sub(/^bash[ \t]+/,"",act); gsub(/"/,"",act)
+      base=act; sub(/[ \t].*/,"",base); sub(/.*\//,"",base) # gate script basename for the ENFORCES lookup
+      # ensure-present matches on the full action (its run cmd has spaces inside $(...), which
+      # would truncate `base`); the clean gate paths below match on the extracted basename.
+      if      (act ~ /ensure-present\.sh/)    enf="self-heal: restore any missing injected files"
+      else if (base=="worktree-discipline.sh") enf="no main-checkout commit carrying WIP from another worktree"
+      else if (base=="deferred-check.sh")      enf="deferred gate - needs a fresh recorded PASS to push"
+      else enf=act
+      gname=(ledgered ? gate : jobname)
+      if (gate!="" && (gate in seen)) {
+        d=now-seen[gate]; if (d<0) d=0
+        if      (d<60)    a="<1m"
+        else if (d<3600)  a=int(d/60)"m"
+        else if (d<86400) a=int(d/3600)"h"
+        else              a=int(d/86400)"d"
+        vc=(verd[gate]=="fail" ? "\342\234\227 fail" : "\342\234\223 pass") " - " a " ago"
+      } else if (ledgered) vc="- not yet run"
+      else vc="\342\200\224"                                # em dash: not a pass/fail gate
+      n++; H[n]=curhook; G[n]=gname; E[n]=enf; V[n]=vc
+      if (length(curhook)>wH) wH=length(curhook)
+      if (length(gname)>wG)   wG=length(gname)
+      if (length(enf)>wE)     wE=length(enf)
+      jobname=""
+      next
+    }
+    END {
+      if (fmt=="md") {
+        if (n==0) { print "_(no guards wired)_"; }
+        else {
+          print "| Run when | Guard | Enforces | Last verdict |"
+          print "| --- | --- | --- | --- |"
+          for (i=1;i<=n;i++) printf "| `%s` | %s | %s | %s |\n", H[i], G[i], E[i], V[i]
+        }
+      } else {
+        if (n==0) { print "  (no guards wired)"; }
+        else {
+          printf "  %-*s   %-*s   %-*s   %s\n", wH,"RUN WHEN", wG,"GUARD", wE,"ENFORCES", "LAST VERDICT"
+          for (i=1;i<=n;i++) printf "  %-*s   %-*s   %-*s   %s\n", wH,H[i], wG,G[i], wE,E[i], V[i]
+        }
+      }
+    }
+  ' "$RUNS_FILE" <(printf '%s\n' "$DUMP")
+}
+
+# Degraded path for render_guards: lefthook couldn't be resolved, so we can't build the
+# join. Fall back to exactly the pre-chart behavior — raw wiring file + plain run ledger.
+render_guards_fallback() {
+  local now
+  if [ "$FORMAT" = md ]; then
+    if [ -f "$ROOT/lefthook-local.yml" ]; then
+      echo "_lefthook not resolved — raw wiring file:_"
+      echo '```yaml'
+      cat "$ROOT/lefthook-local.yml"
+      echo '```'
+    else
+      echo "_(no hook wiring found)_"
+    fi
+    echo
+    echo "**Recent runs**"
+    echo
+    if [ -s "$RUNS" ]; then
+      echo "| Gate | Verdict | When |"
+      echo "| ---- | ------- | ---- |"
+      now="${OMAKASE_NOW:-$(date +%s)}"
+      awk -F'\t' -v now="$now" '
+        NF>=5 && $1 ~ /^[0-9]+$/ { ts=$1+0; if (ts >= seen[$3]) { seen[$3]=ts; verd[$3]=$4 } }
+        END {
+          for (g in seen) {
+            d=now-seen[g]; if (d < 0) d=0
+            if      (d < 60)    a="<1m"
+            else if (d < 3600)  a=int(d/60)"m"
+            else if (d < 86400) a=int(d/3600)"h"
+            else                a=int(d/86400)"d"
+            mark=(verd[g]=="fail" ? "\342\234\227 fail" : "\342\234\223 pass")
+            printf "%s\t| %s | %s | %s ago |\n", g, g, mark, a
+          }
+        }' "$RUNS" | sort | cut -f2-
+    else
+      echo "_No gate runs recorded yet._"
+    fi
+  else
+    if [ -f "$ROOT/lefthook-local.yml" ]; then
+      echo "  (lefthook not resolved — showing the raw wiring file)"
+      sed 's/^/  /' "$ROOT/lefthook-local.yml"
+    else
+      echo "  (no hook wiring found)"
+    fi
+    echo
+    echo "RECENT RUNS — most recent verdict per gate"
+    if [ -s "$RUNS" ]; then
+      now="${OMAKASE_NOW:-$(date +%s)}"
+      awk -F'\t' -v now="$now" '
+        NF>=5 && $1 ~ /^[0-9]+$/ { ts=$1+0; if (ts >= seen[$3]) { seen[$3]=ts; verd[$3]=$4; hook[$3]=$2 } }
+        END {
+          for (g in seen) {
+            d=now-seen[g]; if (d < 0) d=0
+            if      (d < 60)    a="<1m"
+            else if (d < 3600)  a=int(d/60)"m"
+            else if (d < 86400) a=int(d/3600)"h"
+            else                a=int(d/86400)"d"
+            h=(hook[g]=="-" ? "" : hook[g]" ")
+            printf "%s\t  %s  %-4s  %s%s  (%s ago)\n", g, (verd[g]=="fail" ? "\342\234\227" : "\342\234\223"), verd[g], h, g, a
+          }
+        }' "$RUNS" | sort | cut -f2-
+    else
+      echo "  (no gate runs recorded yet)"
     fi
   fi
 }
@@ -182,54 +360,15 @@ fi
 # ============================ Markdown mode ============================
 # The script emits the final Markdown; the /omakase command relays it verbatim.
 if [ "$FORMAT" = md ]; then
-  LH=""
-  if [ -n "${LEFTHOOK_BIN:-}" ]; then LH="$LEFTHOOK_BIN"
-  elif command -v lefthook >/dev/null 2>&1; then LH="lefthook"
-  elif [ -x "$ROOT/node_modules/.bin/lefthook" ]; then LH="$ROOT/node_modules/.bin/lefthook"; fi
-  DUMP=""
-  [ -n "$LH" ] && DUMP="$( cd "$ROOT" && "$LH" dump 2>/dev/null || true )"
-
   echo "## $ICON omakase-harness"
   echo
   echo "Installed in \`$ROOT\`. Injected files are gitignored via \`.git/info/exclude\` — invisible to git, never committed."
   echo
   render_inventory
   echo
-  echo "### Git hooks"
-  if [ -n "$DUMP" ]; then
-    echo '```yaml'
-    printf '%s\n' "$DUMP"
-    echo '```'
-  elif [ -f "$ROOT/lefthook-local.yml" ]; then
-    echo "_lefthook not resolved — raw wiring file:_"
-    echo '```yaml'
-    cat "$ROOT/lefthook-local.yml"
-    echo '```'
-  else
-    echo "_(no hook wiring found)_"
-  fi
+  echo "### Guards — what runs, when, and the last verdict"
   echo
-  echo "### Recent runs"
-  if [ -s "$RUNS" ]; then
-    echo "| Gate | Verdict | When |"
-    echo "| ---- | ------- | ---- |"
-    now="${OMAKASE_NOW:-$(date +%s)}"
-    awk -F'\t' -v now="$now" '
-      NF>=5 && $1 ~ /^[0-9]+$/ { ts=$1+0; if (ts >= seen[$3]) { seen[$3]=ts; verd[$3]=$4 } }
-      END {
-        for (g in seen) {
-          d=now-seen[g]; if (d < 0) d=0
-          if      (d < 60)    a="<1m"
-          else if (d < 3600)  a=int(d/60)"m"
-          else if (d < 86400) a=int(d/3600)"h"
-          else                a=int(d/86400)"d"
-          mark=(verd[g]=="fail" ? "\342\234\227 fail" : "\342\234\223 pass")
-          printf "%s\t| %s | %s | %s ago |\n", g, g, mark, a
-        }
-      }' "$RUNS" | sort | cut -f2-
-  else
-    echo "_No gate runs recorded yet — gates wired through \`omakase-ledger.sh\` log here._"
-  fi
+  render_guards
   echo
   echo "### Hidden via \`.git/info/exclude\`"
   if [ -f "$EXCLUDE" ]; then
@@ -250,43 +389,8 @@ echo
 render_inventory
 echo
 
-echo "GIT HOOKS — what runs, and when"
-LH=""
-if [ -n "${LEFTHOOK_BIN:-}" ]; then LH="$LEFTHOOK_BIN"
-elif command -v lefthook >/dev/null 2>&1; then LH="lefthook"
-elif [ -x "$ROOT/node_modules/.bin/lefthook" ]; then LH="$ROOT/node_modules/.bin/lefthook"; fi
-DUMP=""
-[ -n "$LH" ] && DUMP="$( cd "$ROOT" && "$LH" dump 2>/dev/null || true )"
-if [ -n "$DUMP" ]; then
-  printf '%s\n' "$DUMP" | sed 's/^/  /'
-elif [ -f "$ROOT/lefthook-local.yml" ]; then
-  echo "  (lefthook not resolved — showing the raw wiring file)"
-  sed 's/^/  /' "$ROOT/lefthook-local.yml"
-else
-  echo "  (no hook wiring found)"
-fi
-echo
-
-echo "RECENT RUNS — most recent verdict per gate"
-if [ -s "$RUNS" ]; then
-  now="${OMAKASE_NOW:-$(date +%s)}"
-  awk -F'\t' -v now="$now" '
-    NF>=5 && $1 ~ /^[0-9]+$/ { ts=$1+0; if (ts >= seen[$3]) { seen[$3]=ts; verd[$3]=$4; hook[$3]=$2 } }
-    END {
-      for (g in seen) {
-        d=now-seen[g]; if (d < 0) d=0
-        if      (d < 60)    a="<1m"
-        else if (d < 3600)  a=int(d/60)"m"
-        else if (d < 86400) a=int(d/3600)"h"
-        else                a=int(d/86400)"d"
-        h=(hook[g]=="-" ? "" : hook[g]" ")
-        # leading "<gate><tab>" is a sort key, stripped by cut below
-        printf "%s\t  %s  %-4s  %s%s  (%s ago)\n", g, (verd[g]=="fail" ? "\342\234\227" : "\342\234\223"), verd[g], h, g, a
-      }
-    }' "$RUNS" | sort | cut -f2-
-else
-  echo "  (no gate runs recorded yet — gates wired through omakase-ledger.sh log here)"
-fi
+echo "GUARDS — what runs, when, and the last verdict"
+render_guards
 echo
 
 echo "HIDDEN VIA .git/info/exclude"
