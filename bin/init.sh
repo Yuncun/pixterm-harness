@@ -19,7 +19,7 @@ it is skipped and reported.
 
   --source <git-url|path>
                pull a harness SOURCE — a git repo carrying a payload/ tree plus an
-               omakase.manifest (flat key: value; name required, version optional) —
+               omakase.manifest (flat key: value; name required, version + recommends optional) —
                into a local cache (${XDG_CACHE_HOME:-~/.cache}/omakase/sources) and
                inject its payload. The source is remembered; a later bare init.sh
                refreshes and re-injects the same source.
@@ -64,7 +64,7 @@ else echo "omakase: need shasum or sha256sum for the provenance ledger" >&2; exi
 # ---- source mechanism (spec §1) ----
 # A SOURCE is a git repo carrying the harness: a payload/ tree plus an
 # omakase.manifest at its root (flat "key: value" lines — a YAML subset read with
-# sed, NOT a YAML parser; name required, version optional). It is cloned into a
+# sed, NOT a YAML parser; name required, version + recommends optional). It is cloned into a
 # disposable local cache and injected through the normal flow below. Payload
 # precedence: --source flag > OMAKASE_PAYLOAD env > remembered source
 # ($OMK/source, written on every source install so a bare re-run refreshes the
@@ -105,6 +105,9 @@ fetch_source() {  # $1 = git URL or local path; sets PAYLOAD to the cached paylo
   [ -n "$name" ] || { echo "omakase: source '$src' manifest is missing the required 'name:' line" >&2; exit 1; }
   { [ -d "$cache/payload" ] && [ -n "$(ls -A "$cache/payload" 2>/dev/null)" ]; } || { echo "omakase: source '$src' has no non-empty payload/ tree — nothing to inject" >&2; exit 1; }
   ver="$(sed -n 's/^version:[[:space:]]*//p' "$cache/omakase.manifest" | head -n1 | sed 's/[[:space:]]*$//')"
+  # Optional 'recommends:' — free text printed once at install (e.g. companion
+  # plugins the harness pairs with). Global so the end-of-run summary can surface it.
+  recommends="$(sed -n 's/^recommends:[[:space:]]*//p' "$cache/omakase.manifest" | head -n1 | sed 's/[[:space:]]*$//')"
   echo "omakase: source '$src' (name: $name${ver:+, version: $ver}) cached at $cache"
   PAYLOAD="$cache/payload"
 }
@@ -442,7 +445,22 @@ SNAP="$COMMON/omakase/payload-snapshot"
 LEDGER="$COMMON/omakase/placed.tsv"   # provenance ledger: path,kind,source,sha256,enabled
 [ -f "$LEDGER" ] || exit 0
 TAB="$(printf '\t')"
-while IFS="$TAB" read -r rel kind src hash enabled; do
+# sha256 of placed content — mirrors init.sh hash_of()/SHA256 detection EXACTLY so a
+# drift compare can never false-positive on a different digest method. A symlink hashes
+# its readlink TARGET STRING (so a CLAUDE.md -> AGENTS.md payload round-trips), a regular
+# file hashes its bytes verbatim. No shasum/sha256sum -> empty digest -> every compare is
+# a no-op: drift detection degrades to silence, never to a false warning or a hard error.
+if command -v shasum >/dev/null 2>&1; then _omk_sha() { shasum -a 256; }
+elif command -v sha256sum >/dev/null 2>&1; then _omk_sha() { sha256sum; }
+else _omk_sha() { return 1; }; fi
+omakase_hash_of() {  # $1 = path; echoes the hex digest, or nothing if no digest tool
+  command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 || return 0
+  if [ -L "$1" ]; then printf '%s' "$(readlink "$1" 2>/dev/null)" | _omk_sha | awk '{print $1}'
+  else [ -r "$1" ] && _omk_sha < "$1" | awk '{print $1}'; fi   # unreadable -> empty -> compare skipped, no stderr leak
+}
+# `|| [ -n "$rel" ]`: still process a final ledger row that lacks a trailing newline
+# (a corrupted/truncated ledger must not silently drop its LAST gate from heal+drift).
+while IFS="$TAB" read -r rel kind src hash enabled || [ -n "$rel" ]; do
   [ -z "$rel" ] && continue
   # Self-heal respects intent (safety fix 5): enabled=0 is a deliberate off switch,
   # so a missing disabled artifact is not "missing" — never resurrect it.
@@ -456,7 +474,24 @@ while IFS="$TAB" read -r rel kind src hash enabled; do
     echo "omakase: WARNING — injected path '$rel' is now TRACKED by the repo; your personal copy was likely clobbered by an upstream commit (git overwrites ignored files on checkout). Last-injected copy: $SNAP/$rel — diff it against the tracked file, then drop the path from your payload or cut over (init --cut-over)." >&2
     continue
   fi
-  [ -e "$ROOT/$rel" ] || [ -L "$ROOT/$rel" ] && continue                      # never overwrite (also catches dangling symlinks)
+  # Already present — NEVER overwrite (the heal only fills MISSING files; an auto-reset
+  # could nuke an in-progress edit and would break omakase's never-clobber contract).
+  # But the canonical fingerprint $hash was, until now, captured and thrown away: a
+  # present-but-CHANGED file was indistinguishable from a present-and-correct one. Detect
+  # that DRIFT and SURFACE it (warn only). Two silent failures this catches:
+  #   1. a gate edited/weakened in place — still looks installed and green, no longer protects;
+  #   2. (the common bite) a STALE gate in a linked worktree — a main-checkout re-init
+  #      updated the shared snapshot+ledger, but this worktree's copy already exists, so
+  #      the heal below skips it and the worktree silently keeps running the old gate.
+  if [ -e "$ROOT/$rel" ] || [ -L "$ROOT/$rel" ]; then
+    actual="$(omakase_hash_of "$ROOT/$rel")" || actual=""
+    if [ -n "$hash" ] && [ -n "$actual" ] && [ "$actual" != "$hash" ]; then
+      if [ -e "$SNAP/$rel" ] || [ -L "$SNAP/$rel" ]; then fix="cp -P '$SNAP/$rel' '$ROOT/$rel'  (or /omakase init to re-sync every file)"
+      else fix="/omakase init"; fi
+      echo "omakase: WARNING — injected '$rel' has DRIFTED from canonical (ledger ${hash:0:12}…, on-disk ${actual:0:12}…); a gate may be weakened or stale. Drift only surfaces — your copy is left as-is. Adopt canonical with: $fix" >&2
+    fi
+    continue                                                                  # never overwrite (also catches dangling symlinks)
+  fi
   [ -e "$SNAP/$rel" ] || [ -L "$SNAP/$rel" ] || continue
   mkdir -p "$ROOT/$(dirname "$rel")"
   cp -P "$SNAP/$rel" "$ROOT/$rel"
@@ -466,7 +501,8 @@ done < "$LEDGER"
 # `lefthook install -f` on every npm/yarn install, regenerating the hook stubs and
 # stripping the guard; this post-checkout hook still runs afterwards, so the guard
 # self-heals on the next checkout/pull.
-if [ -f "$COMMON/omakase/install-guards.sh" ]; then sh "$COMMON/omakase/install-guards.sh"; fi
+if [ -f "$COMMON/omakase/install-guards.sh" ]; then sh "$COMMON/omakase/install-guards.sh" || true; fi
+exit 0   # post-checkout self-heal is best-effort: never let a guard-install hiccup fail the checkout job
 ENSURE
 chmod +x "$OMK/ensure-present.sh"
 
@@ -601,6 +637,16 @@ for w in "${swept[@]:-}"; do [ -n "$w" ] && echo "  - removed (placed by a prior
 for s in "${skipped[@]:-}"; do [ -n "$s" ] && echo "  ~ skipped (committed — re-run with --cut-over to let the harness copy take over; guarded, see init.sh --help): $s"; done
 echo "omakase: ignores -> .git/info/exclude; hooks installed; new worktrees auto-install the harness. Nothing to commit."
 echo "omakase: see the whole harness any time with  /omakase show"
+# A harness may name companion tools (e.g. plugins it pairs with) in its manifest's
+# 'recommends:' line. Surfaced once here, at install — installing a companion is a
+# one-time setup action, not a per-session instruction.
+if [ -n "${recommends:-}" ]; then
+  echo "omakase: this harness recommends — $recommends"
+fi
+# How to customize, surfaced where the agent acts: editing injected files in place is
+# overwritten on the next init. The supported path is forking the source.
+echo "omakase: to customize, fork the harness source (clone -> edit -> publish) and"
+echo "         init from your copy; do not edit injected files in place (overwritten on re-init)."
 # Only advertise the scorecard status line when the payload actually ships it.
 # A payload may ship gates but no status-line segment (it forgoes the scorecard
 # surface), and a dangling wire-up instruction is worse than none.
