@@ -54,6 +54,7 @@ fi
 copy_into_payload() {  # $1 = relative path under ROOT
   local rel="$1" src="$ROOT/$1" dst="$PAYLOAD/$1"
   mkdir -p "$(dirname "$dst")"
+  [ -d "$dst" ] || rm -f "$dst"   # don't let `cp -P` follow/write-through an existing dest symlink
   cp -P "$src" "$dst"                                   # -P: carry symlinks as symlinks
   case "$rel" in *.sh) [ -L "$dst" ] || chmod +x "$dst";; esac
 }
@@ -119,7 +120,7 @@ for cfg in lefthook-local.yml lefthook.yml .pre-commit-config.yaml; do
   # stack-coupled run: bodies (won't run off this project's toolchain)
   while IFS= read -r line; do
     stack_jobs+=("${cfg}: ${line}")
-  done < <(grep -E '^\s*run:' "$ROOT/$cfg" 2>/dev/null | grep -E '(pnpm|npm |npx|yarn|turbo|make |cargo|go run|pytest|ruff|vue-tsc)' | sed -E 's/^\s*run:\s*//' | sort -u)
+  done < <(grep -E '^[[:space:]]*run:' "$ROOT/$cfg" 2>/dev/null | grep -E '(pnpm|npm |npx|yarn|turbo|make |cargo|go run|pytest|ruff|vue-tsc)' | sed -E 's/^[[:space:]]*run:[[:space:]]*//' | sort -u)
 done
 
 # ---- report ----

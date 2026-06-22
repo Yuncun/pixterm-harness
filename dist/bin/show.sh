@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # omakase-harness show — render the installed (gitignored, invisible) harness as ONE
-# readable map: an inventory of every harness artifact grouped by origin (committed /
-# injected / personal), which git hooks run what, and what is hidden via
-# .git/info/exclude. Read-only. This is the cure for "the install is invisible" — it
-# lets you SEE the whole harness at a glance without committing anything.
+# readable map: the harness files grouped by origin (committed / injected / personal;
+# omakase's own .omakase/ engine is disclosed under Hidden, not listed), which git
+# hooks run what, and what is hidden via .git/info/exclude. Read-only. This is the cure
+# for "the install is invisible" — it lets you SEE the whole harness at a glance without
+# committing anything.
 #
 # Two output modes:
 #   (default)    terminal — ANSI banner box + indented columns, for a real terminal.
@@ -49,8 +50,9 @@ is_drifted() {  # $1 rel, $2 ledger-hash, $3 enabled -> 0 (true) if present & co
 }
 
 # ============================ Inventory (spec §3) ============================
-# Every harness artifact in this repo, grouped by origin: committed by the
-# project, injected from a source (the provenance ledger), personal (~/.claude + ~/.copilot).
+# The harness files grouped by origin: committed by the project, injected from a
+# source (the provenance ledger; omakase's own .omakase/ engine is disclosed under
+# Hidden, not listed), personal (~/.claude + ~/.copilot).
 # No token counts — the host owns context-cost ground truth.
 
 # kind_of() comes from lib-harness-paths.sh (sourced above) — shared with init.sh + import.sh.
@@ -92,9 +94,7 @@ render_inventory() {
   comm="$(committed_list)"
   pers="$(personal_list)"
   if [ "$FORMAT" = md ]; then
-    echo "### Inventory"
-    echo
-    echo "**Committed (this repo)** — tracked harness files"
+    echo "### Committed (this repo) — tracked harness files"
     if [ -n "$comm" ]; then
       printf '%s\n' "$comm" | while IFS= read -r rel; do
         [ -z "$rel" ] && continue
@@ -104,10 +104,13 @@ render_inventory() {
       echo "- _(none)_"
     fi
     echo
-    echo "**Injected (omakase)** — placed by \`/omakase init\`, gitignored"
+    echo "### Injected (omakase) — placed by \`/omakase init\`, gitignored"
     if [ -f "$PLACED" ] && [ -s "$PLACED" ]; then
+      shown=0
       while IFS=$'\t' read -r rel kind src hash enabled; do
         [ -z "$rel" ] && continue
+        case "$rel" in .omakase/*) continue;; esac   # omakase's own engine/gate scripts live here; not listed (active gates show under Guards; .omakase/ is disclosed under Hidden)
+        shown=1
         dz=""; if is_drifted "$rel" "$hash" "$enabled"; then dz=" — **DRIFTED** (differs from canonical; \`/omakase init\` to re-sync, or it may be an intentional local edit)"; fi
         if [ "$enabled" = "0" ]; then
           echo "- \`$rel\` — $kind, from $src — disabled (not restored, not verified)"
@@ -119,11 +122,12 @@ render_inventory() {
           echo "- \`$rel\` — $kind, from $src — **MISSING** (run \`/omakase init\` to restore)"
         fi
       done < "$PLACED"
+      [ "$shown" = "0" ] && echo "- _(none)_"
     else
       echo "- _(none)_"
     fi
     echo
-    echo "**Personal (global)** — Claude ~/.claude + Copilot ~/.copilot, applies to every repo"
+    echo "### Personal (global) — Claude ~/.claude + Copilot ~/.copilot, applies to every repo"
     if [ -n "$pers" ]; then
       printf '%s\n' "$pers" | while IFS=$'\t' read -r rel kind; do
         [ -z "$rel" ] && continue
@@ -133,8 +137,7 @@ render_inventory() {
       echo "- _(none)_"
     fi
   else
-    echo "INVENTORY — every harness artifact in this repo, by origin"
-    echo "  COMMITTED (this repo) — tracked harness files"
+    echo "COMMITTED (this repo) — tracked harness files"
     if [ -n "$comm" ]; then
       printf '%s\n' "$comm" | while IFS= read -r rel; do
         [ -z "$rel" ] && continue
@@ -143,10 +146,13 @@ render_inventory() {
     else
       echo "    (none)"
     fi
-    echo "  INJECTED (omakase) — placed by /omakase init, gitignored"
+    echo "INJECTED (omakase) — placed by /omakase init, gitignored"
     if [ -f "$PLACED" ] && [ -s "$PLACED" ]; then
+      shown=0
       while IFS=$'\t' read -r rel kind src hash enabled; do
         [ -z "$rel" ] && continue
+        case "$rel" in .omakase/*) continue;; esac   # omakase's own engine/gate scripts live here; not listed (active gates show under Guards; .omakase/ is disclosed under Hidden)
+        shown=1
         dz=""; mk="+"; if is_drifted "$rel" "$hash" "$enabled"; then dz="; DRIFTED — differs from canonical, run /omakase init to re-sync"; mk="~"; fi
         if [ "$enabled" = "0" ]; then
           echo "    - $rel   ($kind, from $src; disabled — not restored, not verified)"
@@ -158,10 +164,11 @@ render_inventory() {
           echo "    ! $rel   ($kind, from $src; MISSING — run /omakase init to restore)"
         fi
       done < "$PLACED"
+      [ "$shown" = "0" ] && echo "    (none)"
     else
       echo "    (none)"
     fi
-    echo "  PERSONAL (global) — Claude ~/.claude + Copilot ~/.copilot, applies to every repo"
+    echo "PERSONAL (global) — Claude ~/.claude + Copilot ~/.copilot, applies to every repo"
     if [ -n "$pers" ]; then
       printf '%s\n' "$pers" | while IFS=$'\t' read -r rel kind; do
         [ -z "$rel" ] && continue
@@ -200,6 +207,7 @@ render_guards() {
   # cell carries the multibyte check/cross and is always last, so alignment stays exact).
   awk -v runsfile="$RUNS_FILE" -v now="$now" -v fmt="$FORMAT" '
     BEGIN { FS="\t"; wH=length("RUN WHEN"); wG=length("GUARD"); wE=length("ENFORCES") }
+    function mdcell(s){ gsub(/\|/,"\\|",s); gsub(/\n/," ",s); return s }   # a literal | in a cell breaks the md table
     FILENAME==runsfile {
       if (NF>=5 && $1 ~ /^[0-9]+$/) { ts=$1+0; if (ts>=seen[$3]) { seen[$3]=ts; verd[$3]=$4 } }
       next
@@ -250,7 +258,7 @@ render_guards() {
         else {
           print "| Run when | Guard | Enforces | Last verdict |"
           print "| --- | --- | --- | --- |"
-          for (i=1;i<=n;i++) printf "| `%s` | %s | %s | %s |\n", H[i], G[i], E[i], V[i]
+          for (i=1;i<=n;i++) printf "| `%s` | %s | %s | %s |\n", H[i], mdcell(G[i]), mdcell(E[i]), V[i]
         }
       } else {
         if (n==0) { print "  (no guards wired)"; }
