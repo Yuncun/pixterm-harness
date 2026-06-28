@@ -14,7 +14,7 @@
 #   complete checkers — whole-project; run per-push (turbo cache keeps repeats cheap).
 #   discipline guards — workflow enforcement (worktree, ADR, visual-verify).
 #
-# 🍣 SCORECARD: verifying gates are wrapped in `omakase-ledger.sh <name> -- <cmd>`, which
+# 🥡 SCORECARD: verifying gates are wrapped in `omakase-ledger.sh <name> -- <cmd>`, which
 # runs the gate, passes its exit code straight through, and appends a pass/fail row to
 # the shared ledger that `/omakase show` (RECENT RUNS) and the status-line segment read.
 # Auto-fixers (prettier, stylelint) are deliberately NOT ledgered — they fix-and-pass, so
@@ -49,7 +49,7 @@ pre-commit:
       run: pnpm exec stylelint --fix --allow-empty-input {staged_files}
       stage_fixed: true
 
-    # --- discipline guards (ledgered → 🍣 scorecard) ---
+    # --- discipline guards (ledgered → 🥡 scorecard) ---
     - name: worktree-discipline
       run: bash .omakase/bin/omakase-ledger.sh worktree-discipline -- bash .omakase/gates/worktree-discipline.sh
       env:
@@ -74,7 +74,7 @@ pre-push:
       group:
         parallel: true
         jobs:
-          # --- complete checkers (ledgered → 🍣 scorecard) ---
+          # --- complete checkers (ledgered → 🥡 scorecard) ---
           - name: typecheck
             run: bash .omakase/bin/omakase-ledger.sh typecheck -- pnpm exec turbo run typecheck
             env:
@@ -110,7 +110,7 @@ pre-push:
             env:
               OMAKASE_HOOK: pre-push
 
-          # --- discipline guard: visual-verify deferred gate (ledgered → 🍣 scorecard) ---
+          # --- discipline guard: visual-verify deferred gate (ledgered → 🥡 scorecard) ---
           - name: deferred-check-visual-verify
             run: bash .omakase/bin/omakase-ledger.sh visual-verify -- bash .omakase/gates/deferred-check.sh
             env:
@@ -118,7 +118,7 @@ pre-push:
               OMAKASE_GLOB: 'apps/web/* packages/*-control/*'
               OMAKASE_HOOK: pre-push
 
-          # --- discipline guard: review deferred gate (ledgered → 🍣 scorecard) ---
+          # --- discipline guard: review deferred gate (ledgered → 🥡 scorecard) ---
           # Enforces that the /review-verify job ran for the pushed code: it wraps the
           # global /review (parallel reviewers + validation) and records a verdict. The
           # hook never runs the review; it reads the record. Skip: OMAKASE_SKIP_REVIEW=1.

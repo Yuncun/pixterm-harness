@@ -1,6 +1,6 @@
 {
   "name": "pixterm-harness",
-  "version": "0.13.1",
+  "version": "0.13.2",
   "description": "pixterm's personal harness, built from omakase-harness: overlays pixterm's guards (worktree-discipline, adr-required, and the visual-verify and review deferred gates), kept out of git and run on your git hooks.",
   "commands": "./commands"
 }
