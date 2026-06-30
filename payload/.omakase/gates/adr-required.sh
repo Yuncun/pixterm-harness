@@ -10,8 +10,8 @@
 # with /adr-new.
 set -euo pipefail
 
-# Escape hatch for trivial edits (typo fixes, dead-link repair, etc.).
-[[ "${SKIP_ADR_CHECK:-0}" == "1" ]] && exit 0
+# Bypass is uniform via the omakase-gate.sh wrapper: OMAKASE_SKIP_ADR_REQUIRED=1 skips
+# this gate (audited) before the step runs — no in-script escape hatch needed.
 
 # Dormant unless the project declares its architectural files.
 read -r -a ARCHITECTURAL_FILES <<< "${HARNESS_ARCH_FILES:-}"
@@ -50,7 +50,7 @@ echo "Architectural changes require an ADR documenting the decision." >&2
 echo "Run:    /adr-new \"Decision title\"" >&2
 echo "Then:   git add docs/adr/<filename>.md && git commit ..." >&2
 echo "" >&2
-echo "Override (rare, for trivial edits): SKIP_ADR_CHECK=1 git commit ..." >&2
+echo "Override (rare, for trivial edits): OMAKASE_SKIP_ADR_REQUIRED=1 git commit ..." >&2
 echo "Document the override reason in the commit body." >&2
 echo "" >&2
 exit 1

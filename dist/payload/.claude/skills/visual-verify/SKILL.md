@@ -1,7 +1,7 @@
 ---
 name: visual-verify
-description: Best-effort visual verification of UI work. Boots the running editor in an isolated stack, generates its own 10–20+ scenarios (weighted to stateful, multi-step sequences), drives agent-browser through each, judges PASS/FAIL/ERROR from screenshots, prints a one-line-per-scenario scorecard, and records its verdict for the pre-push deferred gate. Invoke at done-time on UI work; Claude may self-invoke before claiming completion (per ADR-0033).
-allowed-tools: Bash(agent-browser *) Bash(make *) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(gh pr view:*) Bash(pnpm *) Bash(lsof:*) Bash(curl:*) Bash(kill:*) Bash(.omakase/bin/omakase-record.sh:*) Read Grep
+description: Best-effort visual verification of UI work. Boots the running editor in an isolated stack, generates its own 10–20+ scenarios (weighted to stateful, multi-step sequences), drives agent-browser through each, judges PASS/FAIL/ERROR from screenshots, prints a one-line-per-scenario scorecard, and records a pass (only when clean) for the pre-push deferred gate. Invoke at done-time on UI work; Claude may self-invoke before claiming completion (per ADR-0033).
+allowed-tools: Bash(agent-browser *) Bash(make *) Bash(git log:*) Bash(git show:*) Bash(git diff:*) Bash(gh pr view:*) Bash(pnpm *) Bash(lsof:*) Bash(curl:*) Bash(kill:*) Bash(.omakase/bin/omakase-gate.sh:*) Read Grep
 context: fork
 ---
 
@@ -177,28 +177,28 @@ verdict is shaky rather than rounding up.
 
 ### 7. Record the verdict (for the pre-push gate)
 
-Record the result so the pre-push deferred gate can read it (ADR
-`visual-verify-pre-push-enforcement`). The recorder is injected by the
-`pixterm-harness` plugin at `.omakase/bin/` (run `/omakase-init` if it is
-missing). Run from the repo root:
+Record a pass so the pre-push deferred gate can read it (ADR
+`visual-verify-pre-push-enforcement`). The gate primitive is injected by the
+`pixterm-harness` plugin at `.omakase/bin/` (run `/omakase init` if it is
+missing). Record a pass **only** when the UI was actually verified clean. Run
+from the repo root:
 
 ```bash
-.omakase/bin/omakase-record.sh --check visual-verify --verdict <pass|fail> [--reason "..."]
+.omakase/bin/omakase-gate.sh visual-verify --record
 ```
 
-- **pass** — at least one scenario produced a real PASS or FAIL verdict (the UI was
-  actually exercised) **and** no FAIL row remains un-waived.
-- **fail** — any un-waived FAIL remains, **or** every scenario ERRORed. An all-ERROR
-  run verified nothing and is never a pass; record
-  `--verdict fail --reason "all scenarios errored - could not verify"`.
-- **waiving a false FAIL** — if a FAIL is a judge error, not a real bug, record
-  `--verdict pass --reason "<why the judge was wrong>" --original-verdict fail`. The
-  reason prints as a WAIVED banner at push; keep it specific and honest. A waiver is
-  never silent — do not use it to wave through a real bug.
+- **pass** (record it) — at least one scenario produced a real PASS or FAIL verdict
+  (the UI was actually exercised) **and** no FAIL row remains.
+- **fail or all-ERROR** — record **nothing**. Any un-waived FAIL, or an all-ERROR run
+  that verified nothing, must leave the push blocked (no recorded pass = blocked).
+  Print why, fix, then re-run (a fresh pass unblocks the re-push at the same commit).
+- A FAIL you judge to be a judge error (not a real bug) is just a corrected verdict:
+  dismiss it with your reasoning, then record the pass. To push past a block you have
+  a documented reason to override, do not fake a pass — use the audited bypass
+  `OMAKASE_SKIP_VISUAL_VERIFY=1 git push` (announced at push time, never silent).
 
-Record on **every** path, including the early exits in Steps 2–3: if the editor
-never boots or no usable graph can be made, record `--verdict fail` with a reason
-before cleanup, so the gate reflects that nothing was verified.
+Do not record a pass on the early-exit paths in Steps 2–3: if the editor never boots
+or no usable graph can be made, nothing was verified, so leave the gate blocked.
 
 ### 8. Cleanup — always
 

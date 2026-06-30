@@ -12,20 +12,27 @@
 # Gates are grouped by TYPE, built to extend (add more of a type, don't special-case):
 #   scoped checkers   — fast, staged-file-scoped, auto-fix; run per-commit.
 #   complete checkers — whole-project; run per-push (turbo cache keeps repeats cheap).
-#   discipline guards — workflow enforcement (worktree, ADR, visual-verify).
+#   discipline guards — workflow enforcement (worktree, ADR, visual-verify, review).
 #
-# 🥡 SCORECARD: verifying gates are wrapped in `omakase-ledger.sh <name> -- <cmd>`, which
-# runs the gate, passes its exit code straight through, and appends a pass/fail row to
-# the shared ledger that `/omakase show` (RECENT RUNS) and the status-line segment read.
-# Auto-fixers (prettier, stylelint) are deliberately NOT ledgered — they fix-and-pass, so
-# a verdict for them is low signal. OMAKASE_HOOK is the trigger label shown in the scorecard.
+# 🥡 SCORECARD: every gate is one `omakase-gate.sh <name> --step '<cmd>'` call (the primitive
+# comes from the omakase BASE harness, layered in at build time — this harness ships none of
+# the base machinery itself). It runs the step, passes its exit code straight through, and
+# appends a pass/fail row to the shared ledger that `/omakase status` (RECENT RUNS) and the
+# status-line segment read. Auto-fixers (prettier, stylelint) are deliberately NOT gated —
+# they fix-and-pass, so a verdict for them is low signal.
+#
+# DEFERRED GATES (visual-verify, review): a check that cannot run inside a hook = --cacheable +
+# a step that blocks. The step refuses; the /visual-verify or /review-verify skill runs the real
+# check at done-time and records a pass with `omakase-gate.sh <name> --record`; the re-push at the
+# same commit is then allowed. --glob scopes each to the paths that warrant it.
 #
 # BANNER: `output` drops only lefthook's `meta` header box (the omakase-banner job prints
 # the branded box in its place) and keeps the summary — so a multi-job pre-push still lists
 # every gate's verdict + timing under the box. On pre-push the banner runs sequentially
 # first, then the checks run in a parallel `group`.
 #
-# Escape hatches: SKIP_WORKTREE_CHECK=1, SKIP_ADR_CHECK=1, OMAKASE_SKIP_VISUAL_VERIFY=1, OMAKASE_SKIP_REVIEW=1.
+# Escape hatches (uniform, audited): OMAKASE_SKIP_WORKTREE_DISCIPLINE=1, OMAKASE_SKIP_ADR_REQUIRED=1,
+# OMAKASE_SKIP_VISUAL_VERIFY=1, OMAKASE_SKIP_REVIEW=1 (gate name upper-cased, '-' -> '_').
 
 output: [summary, success, failure, execution_out]
 
@@ -35,7 +42,7 @@ pre-commit:
     - name: omakase-banner
       run: bash .omakase/bin/omakase-banner.sh pre-commit
 
-    # --- scoped checkers (auto-fixers; not ledgered — they fix-and-pass) ---
+    # --- scoped checkers (auto-fixers; not gated — they fix-and-pass) ---
     # pnpm exec resolves the tool from the project's node_modules — lefthook does
     # not add node_modules/.bin to PATH, and bare `prettier`/`stylelint` are not
     # globally installed, so a bare name fails with exit 127 on every staged match.
@@ -49,20 +56,17 @@ pre-commit:
       run: pnpm exec stylelint --fix --allow-empty-input {staged_files}
       stage_fixed: true
 
-    # --- discipline guards (ledgered → 🥡 scorecard) ---
+    # --- discipline guards (gated → 🥡 scorecard) ---
     - name: worktree-discipline
-      run: bash .omakase/bin/omakase-ledger.sh worktree-discipline -- bash .omakase/gates/worktree-discipline.sh
-      env:
-        OMAKASE_HOOK: pre-commit
+      run: bash .omakase/bin/omakase-gate.sh worktree-discipline --step 'bash .omakase/gates/worktree-discipline.sh'
 
     - name: adr-required
-      run: bash .omakase/bin/omakase-ledger.sh adr-required -- bash .omakase/gates/adr-required.sh
+      run: bash .omakase/bin/omakase-gate.sh adr-required --step 'bash .omakase/gates/adr-required.sh'
       tags: [adr]
       env:
         # AGENTS.md is now injected (gitignored) and can never stage, so listing it
         # here is dead — adr-required only fires on ARCHITECTURE.md (still committed).
         HARNESS_ARCH_FILES: 'ARCHITECTURE.md'
-        OMAKASE_HOOK: pre-commit
 
 pre-push:
   jobs:
@@ -74,60 +78,39 @@ pre-push:
       group:
         parallel: true
         jobs:
-          # --- complete checkers (ledgered → 🥡 scorecard) ---
+          # --- complete checkers (gated → 🥡 scorecard) ---
           - name: typecheck
-            run: bash .omakase/bin/omakase-ledger.sh typecheck -- pnpm exec turbo run typecheck
-            env:
-              OMAKASE_HOOK: pre-push
+            run: bash .omakase/bin/omakase-gate.sh typecheck --step 'pnpm exec turbo run typecheck'
 
           - name: lint
-            run: bash .omakase/bin/omakase-ledger.sh lint -- pnpm exec turbo run lint
-            env:
-              OMAKASE_HOOK: pre-push
+            run: bash .omakase/bin/omakase-gate.sh lint --step 'pnpm exec turbo run lint'
 
           - name: test
-            run: bash .omakase/bin/omakase-ledger.sh test -- pnpm exec turbo run test
-            env:
-              OMAKASE_HOOK: pre-push
+            run: bash .omakase/bin/omakase-gate.sh test --step 'pnpm exec turbo run test'
 
           - name: validate-packages
-            run: bash .omakase/bin/omakase-ledger.sh validate-packages -- pnpm run validate:packages
-            env:
-              OMAKASE_HOOK: pre-push
+            run: bash .omakase/bin/omakase-gate.sh validate-packages --step 'pnpm run validate:packages'
 
           - name: validate-exports
-            run: bash .omakase/bin/omakase-ledger.sh validate-exports -- pnpm run validate:exports
-            env:
-              OMAKASE_HOOK: pre-push
+            run: bash .omakase/bin/omakase-gate.sh validate-exports --step 'pnpm run validate:exports'
 
           - name: validate-markdown-links
-            run: bash .omakase/bin/omakase-ledger.sh validate-markdown-links -- pnpm run validate:markdown-links
-            env:
-              OMAKASE_HOOK: pre-push
+            run: bash .omakase/bin/omakase-gate.sh validate-markdown-links --step 'pnpm run validate:markdown-links'
 
           - name: audit-ui-regression-tests
-            run: bash .omakase/bin/omakase-ledger.sh audit-ui-regression-tests -- pnpm run validate:audit-ui-regression-tests
-            env:
-              OMAKASE_HOOK: pre-push
+            run: bash .omakase/bin/omakase-gate.sh audit-ui-regression-tests --step 'pnpm run validate:audit-ui-regression-tests'
 
-          # --- discipline guard: visual-verify deferred gate (ledgered → 🥡 scorecard) ---
-          - name: deferred-check-visual-verify
-            run: bash .omakase/bin/omakase-ledger.sh visual-verify -- bash .omakase/gates/deferred-check.sh
-            env:
-              OMAKASE_CHECK: visual-verify
-              OMAKASE_GLOB: 'apps/web/* packages/*-control/*'
-              OMAKASE_HOOK: pre-push
+          # --- discipline guard: visual-verify deferred gate (gated → 🥡 scorecard) ---
+          # Blocks the push unless /visual-verify recorded a fresh PASS for the exact commit,
+          # and only when the push touches UI source. The hook never runs the editor.
+          - name: visual-verify
+            run: bash .omakase/bin/omakase-gate.sh visual-verify --cacheable --glob 'apps/web/* packages/*-control/*' --step 'echo "BLOCKED - run /visual-verify at done-time, then push again" >&2; exit 1'
 
-          # --- discipline guard: review deferred gate (ledgered → 🥡 scorecard) ---
-          # Enforces that the /review-verify job ran for the pushed code: it wraps the
-          # global /review (parallel reviewers + validation) and records a verdict. The
-          # hook never runs the review; it reads the record. Skip: OMAKASE_SKIP_REVIEW=1.
-          - name: deferred-check-review
-            run: bash .omakase/bin/omakase-ledger.sh review -- bash .omakase/gates/deferred-check.sh
-            env:
-              OMAKASE_CHECK: review
-              OMAKASE_GLOB: 'apps/* packages/*'
-              OMAKASE_HOOK: pre-push
+          # --- discipline guard: review deferred gate (gated → 🥡 scorecard) ---
+          # Enforces that /review-verify ran for the pushed code: it wraps the global /review
+          # (parallel reviewers + validation) and records a pass. The hook never runs the review.
+          - name: review
+            run: bash .omakase/bin/omakase-gate.sh review --cacheable --glob 'apps/* packages/*' --step 'echo "BLOCKED - run /review-verify at done-time, then push again" >&2; exit 1'
 
 # Worktree auto-install: copy any MISSING injected file into this worktree from the
 # shared snapshot on every checkout. Never overwrites a local edit. Written by init.sh.

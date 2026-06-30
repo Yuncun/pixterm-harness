@@ -21,8 +21,9 @@ complete checkers (typecheck, lint, test, the validators; per-push), and the gua
 | `review` (deferred gate) | pre-push | Blocks unless the review-verify job recorded a PASS for the pushed code. Dormant unless the pushed range touches the app/package globs. |
 
 The wiring lives in `payload/lefthook-local.yml`. A deferred gate reads a commit-keyed record
-its job writes into `.git/`, never committed. Escape hatches: `SKIP_WORKTREE_CHECK=1`,
-`SKIP_ADR_CHECK=1`, `OMAKASE_SKIP_VISUAL_VERIFY=1`, `OMAKASE_SKIP_REVIEW=1`.
+its job writes into `.git/`, never committed. Escape hatches (uniform, audited):
+`OMAKASE_SKIP_WORKTREE_DISCIPLINE=1`, `OMAKASE_SKIP_ADR_REQUIRED=1`,
+`OMAKASE_SKIP_VISUAL_VERIFY=1`, `OMAKASE_SKIP_REVIEW=1`.
 
 ## Relationship to omakase-harness
 

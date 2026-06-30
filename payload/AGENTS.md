@@ -34,7 +34,7 @@ Architectural changes to `ARCHITECTURE.md` or `AGENTS.md` require a paired ADR (
 
 ## Worktree discipline
 
-Implementation work uses `superpowers:using-git-worktrees` (ADR-0034 — main-checkout branches inherit other sessions' WIP). Hooks warn + block; escape: `SKIP_WORKTREE_CHECK=1`.
+Implementation work uses `superpowers:using-git-worktrees` (ADR-0034 — main-checkout branches inherit other sessions' WIP). Hooks warn + block; escape: `OMAKASE_SKIP_WORKTREE_DISCIPLINE=1`.
 
 ## Harness changes
 
