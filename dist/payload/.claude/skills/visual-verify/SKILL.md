@@ -12,18 +12,18 @@ running editor like a skeptical user and report what actually renders — not wh
 the code "should" do. If you catch yourself reasoning "the code looks fine,"
 stop: you are here to look at pixels, not read source.
 
-You drive the UI and judge it; you print a scorecard and **record a verdict** that
-the pre-push deferred gate reads (Step 7). You do not write a commit or a trailer,
-and you do not block anything yourself — the gate enforces your recorded verdict
-at push time (ADR `visual-verify-pre-push-enforcement`). The scorecard is still for
-a human to skim; the record is what the gate checks.
+You drive the UI and judge it; you print a scorecard and, when it renders clean,
+**record a pass** that the pre-push deferred gate reads (Step 7). You do not write a
+commit or a trailer, and you do not block anything yourself — the gate enforces your
+recorded pass at push time (ADR `visual-verify-pre-push-enforcement`). The scorecard is
+still for a human to skim; the recorded pass is what the gate checks.
 
 ## The one rule: never break
 
 The run must survive anything. The editor failing to boot, one scenario erroring
 mid-way, agent-browser losing its session — none of that aborts the run. Mark
 that line **ERROR** with a one-line reason and move on. **The scorecard always
-prints, the verdict is recorded (Step 7), and cleanup (Step 8) always runs.** A half-finished run that prints 12
+prints, a pass is recorded only when clean (Step 7), and cleanup (Step 8) always runs.** A half-finished run that prints 12
 honest rows beats a clean crash that prints nothing.
 
 ## Procedure
@@ -75,8 +75,9 @@ until curl -s "http://localhost:$PORT/healthz" > /dev/null; do sleep 0.5; done
 echo "visual-verify boot: port=$PORT session=$SESSION pid=$WEBAPP_PID"
 ```
 
-If the boot loop never becomes ready (e.g. ~30s pass), stop waiting, record the
-boot error as a single ERROR scorecard row, record a fail verdict (Step 7), run Step 8 cleanup, and exit.
+If the boot loop never becomes ready (e.g. ~30s pass), stop waiting, print the
+boot error as a single ERROR scorecard row, record NOTHING (Step 7 — nothing was
+verified, so the gate stays blocked), run Step 8 cleanup, and exit.
 
 ### 3. Get something to drive
 
@@ -175,7 +176,7 @@ deliverable — a legible record for a human to skim, not a proof. An LLM judge 
 false-PASS (rubber-stamp, hallucinate "I see X", race a screenshot); say so if a
 verdict is shaky rather than rounding up.
 
-### 7. Record the verdict (for the pre-push gate)
+### 7. Record the pass (for the pre-push gate)
 
 Record a pass so the pre-push deferred gate can read it (ADR
 `visual-verify-pre-push-enforcement`). The gate primitive is injected by the
@@ -189,8 +190,8 @@ from the repo root:
 
 - **pass** (record it) — at least one scenario produced a real PASS or FAIL verdict
   (the UI was actually exercised) **and** no FAIL row remains.
-- **fail or all-ERROR** — record **nothing**. Any un-waived FAIL, or an all-ERROR run
-  that verified nothing, must leave the push blocked (no recorded pass = blocked).
+- **fail or all-ERROR** — record **nothing**. Any FAIL, or an all-ERROR run that
+  verified nothing, must leave the push blocked (no recorded pass = blocked).
   Print why, fix, then re-run (a fresh pass unblocks the re-push at the same commit).
 - A FAIL you judge to be a judge error (not a real bug) is just a corrected verdict:
   dismiss it with your reasoning, then record the pass. To push past a block you have

@@ -50,7 +50,7 @@ Print one line per validated finding — `file:line — issue — why flagged` �
 tally. If none, say "no high-signal issues." Surface any findings first; do not
 round a shaky review up to clean.
 
-### 4. Record the verdict (for the pre-push gate)
+### 4. Record the pass (for the pre-push gate)
 
 Record a pass **only** when the review genuinely ran over the range and no
 validated high-signal issue remains. Run from the repo root:
