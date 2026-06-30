@@ -62,5 +62,5 @@ injected `lefthook-local.yml`. The guard itself is injected by the
 `pixterm-harness` plugin at `.omakase/gates/adr-required.sh` — personal and
 gitignored, not committed (`ADR 2026-06-03-pixterm-dogfoods-via-injection`). When
 the harness is installed, the pre-commit hook rejects any commit that modifies one
-of those files without also adding a new ADR. Override (rare, for typo fixes only): set `SKIP_ADR_CHECK=1`
+of those files without also adding a new ADR. Override (rare, for typo fixes only): set `OMAKASE_SKIP_ADR_REQUIRED=1`
 and document the reason in the commit body.

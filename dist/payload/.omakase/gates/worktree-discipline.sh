@@ -8,8 +8,8 @@
 # worktree (the superpowers:using-git-worktrees skill creates one).
 set -euo pipefail
 
-# Escape hatch — document the reason in the commit body.
-[[ "${SKIP_WORKTREE_CHECK:-0}" == "1" ]] && exit 0
+# Bypass is uniform via the omakase-gate.sh wrapper: OMAKASE_SKIP_WORKTREE_DISCIPLINE=1
+# skips this gate (audited) before the step runs — no in-script escape hatch needed.
 
 # Only fires inside a git repo.
 git rev-parse --show-toplevel >/dev/null 2>&1 || exit 0
@@ -67,6 +67,6 @@ echo "" >&2
 echo "    Use the superpowers:using-git-worktrees skill" >&2
 echo "" >&2
 echo "Escape hatch (rare, document the reason in the commit body):" >&2
-echo "    SKIP_WORKTREE_CHECK=1 git commit ..." >&2
+echo "    OMAKASE_SKIP_WORKTREE_DISCIPLINE=1 git commit ..." >&2
 echo "" >&2
 exit 1
